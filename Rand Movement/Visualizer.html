@@ -142,9 +142,11 @@ function buildPath(entries) {
   let x = 0, y = 0;
   const path  = [{ x, y }];   // continuous waypoints
   const turns = [];            // (x,y) of each turn point
+  let currentYaw = 0;
 
   for (const e of entries) {
     if (e.type === 'drive') {
+      currentYaw = e.yaw;
       const rad = (e.yaw * Math.PI) / 180;
       x += DIST_PER_DRIVE * Math.sin(rad);
       y += DIST_PER_DRIVE * Math.cos(rad);
@@ -153,7 +155,7 @@ function buildPath(entries) {
       turns.push({ x, y });
     } else if (e.type === 'reverse') {
       const returnDist = SPEED_CM_PER_MS * e.rev
-      const rad = (e.yaw * Math.PI) / 180;
+      const rad = (currentYaw * Math.PI) / 180;
       x -= returnDist * Math.sin(rad);
       y -= returnDist * Math.cos(rad);
       path.push({ x, y });
@@ -161,6 +163,8 @@ function buildPath(entries) {
   }
   return { path, turns };
 }
+
+console.log("Finished analyzing file.")
 
 // -- Draw ---------------------------------------------------------------------
 function draw(path, turns) {
