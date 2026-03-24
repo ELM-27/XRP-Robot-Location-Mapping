@@ -1,81 +1,97 @@
 from XRPLib.defaults import *
 from XRPLib.board import Board
+from XRPLib.reflectance import Reflectance
 from XRPLib.differential_drive import DifferentialDrive
 import time
 
-board = Board.get_default_board()
-drive = DifferentialDrive.get_default_differential_drive()
+board       = Board.get_default_board()
+reflectance = Reflectance.get_default_reflectance()
+drive       = DifferentialDrive.get_default_differential_drive()
 
-# -- Calibration (must match xrp_mapper.py) ------------------------------------
-SPEED        = 0.45   # forward effort used during recording
-TURN_EFFORT  = 0.45   # turning effort used during recording
-DEG_PER_MS   = 0.18   # adjust to match your robot
+SPEED           = 0.45
+TURN_EFFORT     = 0.45
+BACKUP_TIME_MS  = 600
+PAUSE_MS        = 80
+TURN_TOLERANCE  = 2.0
+TURN_OVERSHOOT  = 3.0
 
-# -- Timing --------------------------------------------------------------------
-YAW_INTERVAL_MS = 20   # each Drive entry = this many ms of forward movement
-PAUSE_MS        = 40   # short pause between commands for mechanical settling
-
-# -- Load movement log ---------------------------------------------------------
 print("Loading movement_log.txt...")
-
 entries = []
 try:
-    with open("movement_log.txt", "r") as f:
-        for raw in f:
-            line = raw.strip()
-            if line.startswith("Drive:"):
-                val = float(line[6:].strip())
-                entries.append(("drive", val))
-            elif line.startswith("Turn:"):
-                val = float(line[5:].strip())
-                entries.append(("turn", val))
+    f = open("movement_log.txt", "r")
+    for raw in f:
+        line = raw.strip()
+        if line.startswith("Segment:"):
+            val = float(line[8:].strip())
+            entries.append(("segment", val))
+        elif line.startswith("Reverse:"):
+            val = float(line[8:].strip().split()[0])
+            entries.append(("reverse", val))
+        elif line.startswith("Turn:"):
+            val = float(line[5:].strip().split()[0])
+            entries.append(("turn", val))
+    f.close()
 except OSError:
-    print("ERROR: movement_log.txt not found on the XRP filesystem.")
-    print("Transfer it via XRPCode Files tab first.")
+    print("ERROR: movement_log.txt not found.")
     raise SystemExit
 
 print("Loaded " + str(len(entries)) + " entries.")
-print("Press user button to start replay...")
 
-# Wait for button press to begin
+imu.calibrate()
+
+def angle_diff(target, current):
+    d = target - current
+    while d > 180:
+        d = d - 360
+    while d < -180:
+        d = d + 360
+    return d
+
+def do_reverse(dur_ms):
+    drive.set_effort(-SPEED, -SPEED)
+    time.sleep_ms(int(dur_ms))
+    drive.stop()
+    time.sleep_ms(PAUSE_MS)
+
+def do_turn(delta_deg):
+    start_yaw  = imu.get_yaw()
+    target_yaw = start_yaw + delta_deg
+    if delta_deg >= 0:
+        direction = 1
+    else:
+        direction = -1
+    early_stop = target_yaw - (direction * TURN_OVERSHOOT)
+    drive.set_effort(-direction * TURN_EFFORT, direction * TURN_EFFORT)
+    while abs(angle_diff(early_stop, imu.get_yaw())) > TURN_TOLERANCE:
+        time.sleep_ms(5)
+    drive.stop()
+    time.sleep_ms(PAUSE_MS)
+
+print("Press user button to start replay...")
 while not board.is_button_pressed():
     time.sleep_ms(20)
-time.sleep_ms(300)   # debounce
-
+time.sleep_ms(300)
 print("Replaying...")
 
-# -- Replay --------------------------------------------------------------------
 i = 0
 while i < len(entries):
-    action, val = entries[i]
+    action = entries[i][0]
+    val    = entries[i][1]
 
-    if action == "drive":
-        # Count how many consecutive Drive entries follow (one forward segment)
-        j = i
-        while j < len(entries) and entries[j][0] == "drive":
-            j += 1
-        segment_count = j - i
-        segment_ms    = segment_count * YAW_INTERVAL_MS
-
+    if action == "segment":
         drive.set_effort(SPEED, SPEED)
-        time.sleep_ms(segment_ms)
+        time.sleep_ms(int(val))
         drive.stop()
         time.sleep_ms(PAUSE_MS)
+        i = i + 1
 
-        i = j   # skip all the drive entries we just consumed
+    elif action == "reverse":
+        do_reverse(val)
+        i = i + 1
 
     elif action == "turn":
-        deg       = val
-        direction = 1 if deg >= 0 else -1
-        abs_deg   = abs(deg)
-        dur_ms    = int(abs_deg / DEG_PER_MS)
-
-        drive.set_effort(-direction * TURN_EFFORT, direction * TURN_EFFORT)
-        time.sleep_ms(dur_ms)
-        drive.stop()
-        time.sleep_ms(PAUSE_MS)
-
-        i += 1
+        do_turn(val)
+        i = i + 1
 
 drive.stop()
 print("Replay complete.")
