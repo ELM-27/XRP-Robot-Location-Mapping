@@ -10,27 +10,17 @@ board = Board.get_default_board()
 reflectance = Reflectance.get_default_reflectance()
 drive = DifferentialDrive.get_default_differential_drive()
 
-# -- Tunables ------------------------------------------------------------------
-SPEED           = 0.45   # forward effort (0..1)
-THRESH          = 0.05   # line detection threshold vs baseline
-BACKUP_TIME_MS  = 600    # small reverse bounce off the line
-PAUSE_MS        = 80     # brief pause after stopping
-TURN_EFFORT     = 0.45   # turning power (0..1)
-YAW_INTERVAL_MS = 20     # how often to record yaw while driving
+SPEED           = 0.45
+THRESH          = 0.05
+BACKUP_TIME_MS  = 600
+PAUSE_MS        = 80
+TURN_EFFORT     = 0.45
+YAW_INTERVAL_MS = 20
+DEG_PER_MS      = 0.18
 
-# -- Dead-reckoning calibration ------------------------------------------------
-# Spin in place for 1000 ms, measure degrees turned.
-# DEG_PER_MS = measured_degrees / 1000
-DEG_PER_MS = 0.18   # adjust to your robot
-
-# -- State ---------------------------------------------------------------------
 imu.calibrate()
-heading = imu.get_yaw()   # degrees, 0 = forward at start, CW positive
-
-# -- Log lines collected during the run ---------------------------------------
+heading = imu.get_yaw()
 log_lines = []
-
-# -- Helpers -------------------------------------------------------------------
 
 def on_line():
     return (abs(reflectance.get_left()  - start_left)  >= THRESH or
@@ -39,17 +29,13 @@ def on_line():
 def fmt1(v):
     return str(round(v, 1))
 
-# -- Baseline reflectance ------------------------------------------------------
 start_left  = reflectance.get_left()
 start_right = reflectance.get_right()
 
-# -- Main behaviour loop -------------------------------------------------------
 while not board.is_button_pressed():
-
-    # Drive forward, logging yaw every YAW_INTERVAL_MS
     drive.set_effort(SPEED, SPEED)
-    t_last_yaw = time.ticks_ms()
-
+    t_start    = time.ticks_ms()
+    t_last_yaw = t_start
     while (not board.is_button_pressed()) and (not on_line()):
         now = time.ticks_ms()
         if time.ticks_diff(now, t_last_yaw) >= YAW_INTERVAL_MS:
@@ -57,46 +43,50 @@ while not board.is_button_pressed():
             log_lines.append("Drive: " + fmt1(heading))
             t_last_yaw = now
         time.sleep_ms(5)
-
     drive.stop()
-
+    t_end = time.ticks_ms()
+    segment_ms = time.ticks_diff(t_end, t_start)
+    # Overwrite the drive entries with a single SegmentMs line
+    # Remove drive entries we just added and replace with timed segment
+    while log_lines and log_lines[-1].startswith("Drive:"):
+        log_lines.pop()
+    log_lines.append("Segment: " + str(segment_ms))
     if board.is_button_pressed():
         break
-
     time.sleep_ms(PAUSE_MS)
 
-    # Back up
     log_lines.append("Reverse: " + fmt1(float(BACKUP_TIME_MS)))
     drive.set_effort(-SPEED, -SPEED)
     time.sleep_ms(BACKUP_TIME_MS)
     drive.stop()
     time.sleep_ms(PAUSE_MS)
 
-    # Random turn: negative = left (CCW), positive = right (CW)
     turn_deg = random.randint(-180, 180)
     direction = 1 if turn_deg >= 0 else -1
     abs_deg = abs(turn_deg)
     duration_ms = int(abs_deg / DEG_PER_MS)
-
-    log_lines.append("Turn: " + fmt1(turn_deg))
-
     drive.set_effort(-direction * TURN_EFFORT, direction * TURN_EFFORT)
+    yaw_before = imu.get_yaw()
     time.sleep_ms(duration_ms)
     drive.stop()
-
+    time.sleep_ms(100)
+    yaw_after = imu.get_yaw()
+    actual_turn = yaw_after - yaw_before
+    while actual_turn > 180:
+        actual_turn = actual_turn - 360
+    while actual_turn < -180:
+        actual_turn = actual_turn + 360
+    log_lines.append("Turn: " + fmt1(actual_turn))
     heading = imu.get_yaw()
     time.sleep_ms(PAUSE_MS)
 
-    # Re-sample baseline inside arena
     start_left  = reflectance.get_left()
     start_right = reflectance.get_right()
 
-# -- Stopped - save log file ---------------------------------------------------
 drive.stop()
-
-with open("movement_log.txt", "w") as f:
-    for line in log_lines:
-        f.write(line + "\n")
-
+f = open("movement_log.txt", "w")
+for line in log_lines:
+    f.write(line + "\n")
+f.close()
 print("Saved movement_log.txt (" + str(len(log_lines)) + " lines)")
 print("Retrieve it via XRPCode Files tab.")
