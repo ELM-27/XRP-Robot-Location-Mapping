@@ -13,7 +13,7 @@ drive = DifferentialDrive.get_default_differential_drive()
 # -- Tunables ------------------------------------------------------------------
 SPEED           = 0.45   # forward effort (0..1)
 THRESH          = 0.05   # line detection threshold vs baseline
-BACKUP_TIME_MS  = 250    # small reverse bounce off the line
+BACKUP_TIME_MS  = 600    # small reverse bounce off the line
 PAUSE_MS        = 80     # brief pause after stopping
 TURN_EFFORT     = 0.45   # turning power (0..1)
 YAW_INTERVAL_MS = 20     # how often to record yaw while driving
@@ -24,7 +24,8 @@ YAW_INTERVAL_MS = 20     # how often to record yaw while driving
 DEG_PER_MS = 0.18   # adjust to your robot
 
 # -- State ---------------------------------------------------------------------
-heading = 0.0   # degrees, 0 = forward at start, CW positive
+imu.calibrate()
+heading = imu.get_yaw()   # degrees, 0 = forward at start, CW positive
 
 # -- Log lines collected during the run ---------------------------------------
 log_lines = []
@@ -52,6 +53,7 @@ while not board.is_button_pressed():
     while (not board.is_button_pressed()) and (not on_line()):
         now = time.ticks_ms()
         if time.ticks_diff(now, t_last_yaw) >= YAW_INTERVAL_MS:
+            heading = imu.get_yaw()
             log_lines.append("Drive: " + fmt1(heading))
             t_last_yaw = now
         time.sleep_ms(5)
@@ -64,13 +66,14 @@ while not board.is_button_pressed():
     time.sleep_ms(PAUSE_MS)
 
     # Back up
+    log_lines.append("Reverse: " + fmt1(float(BACKUP_TIME_MS)))
     drive.set_effort(-SPEED, -SPEED)
     time.sleep_ms(BACKUP_TIME_MS)
     drive.stop()
     time.sleep_ms(PAUSE_MS)
 
     # Random turn: negative = left (CCW), positive = right (CW)
-    turn_deg = random.randint(-360, 360)
+    turn_deg = random.randint(-180, 180)
     direction = 1 if turn_deg >= 0 else -1
     abs_deg = abs(turn_deg)
     duration_ms = int(abs_deg / DEG_PER_MS)
@@ -81,7 +84,7 @@ while not board.is_button_pressed():
     time.sleep_ms(duration_ms)
     drive.stop()
 
-    heading = (heading + turn_deg) % 360
+    heading = imu.get_yaw()
     time.sleep_ms(PAUSE_MS)
 
     # Re-sample baseline inside arena
