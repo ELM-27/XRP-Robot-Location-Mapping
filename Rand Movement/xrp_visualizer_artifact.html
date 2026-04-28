@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>XRP Path Map</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #080c10; --panel: #0d1117; --border: #1c2330; --border2: #243040;
+    --text: #8faabe; --text-hi: #cde0f5; --accent: #00c8ff; --accent2: #ff6b35;
+    --green: #39d98a; --yellow: #f5c542; --red: #ff4f4f; --boundary: #ff6b35;
+    --mono: 'Share Tech Mono', monospace; --display: 'Orbitron', sans-serif;
+  }
+  body { background: var(--bg); color: var(--text); font-family: var(--mono); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 28px 16px 40px; gap: 18px; }
+  body::before { content: ''; position: fixed; inset: 0; background: repeating-linear-gradient(to bottom, transparent 0px, transparent 3px, rgba(0,0,0,0.07) 3px, rgba(0,0,0,0.07) 4px); pointer-events: none; z-index: 9999; }
+  header { width: 100%; max-width: 900px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  h1 { font-family: var(--display); font-size: 1.05rem; font-weight: 700; letter-spacing: 0.22em; color: var(--accent); text-shadow: 0 0 18px rgba(0,200,255,0.4); text-transform: uppercase; }
+  .subtitle { font-size: 0.65rem; letter-spacing: 0.18em; color: var(--text); opacity: 0.6; text-transform: uppercase; }
+  .hline { width: 100%; max-width: 900px; height: 1px; background: linear-gradient(90deg, transparent, var(--border2), var(--accent), var(--border2), transparent); opacity: 0.6; }
+  #drop-zone { width: 100%; max-width: 900px; border: 1px dashed var(--border2); border-radius: 4px; padding: 16px 32px; text-align: center; cursor: pointer; transition: border-color 0.2s, background 0.2s, box-shadow 0.2s; font-size: 0.75rem; color: var(--text); letter-spacing: 0.1em; background: var(--panel); }
+  #drop-zone::before { content: '▶ '; color: var(--accent); }
+  #drop-zone:hover, #drop-zone.drag-over { border-color: var(--accent); background: #0d1520; box-shadow: 0 0 20px rgba(0,200,255,0.12); color: var(--text-hi); }
+  #drop-zone input { display: none; }
+  #stats { width: 100%; max-width: 900px; display: flex; gap: 0; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; font-size: 0.7rem; background: var(--panel); }
+  .stat { flex: 1; min-width: 120px; padding: 8px 14px; border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 3px; }
+  .stat:last-child { border-right: none; }
+  .stat-label { font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text); opacity: 0.55; }
+  .stat-val { color: var(--text-hi); font-size: 0.82rem; font-family: var(--display); }
+  .stat-val.accent { color: var(--accent); } .stat-val.yellow { color: var(--yellow); } .stat-val.orange { color: var(--accent2); } .stat-val.green { color: var(--green); }
+  #canvas-wrap { position: relative; border: 1px solid var(--border2); border-radius: 4px; overflow: hidden; background: var(--bg); box-shadow: 0 0 40px rgba(0,200,255,0.06), 0 0 0 1px var(--border); }
+  canvas { display: block; }
+  #canvas-wrap::before, #canvas-wrap::after { content: ''; position: absolute; width: 16px; height: 16px; border-color: var(--accent); border-style: solid; opacity: 0.5; z-index: 10; pointer-events: none; }
+  #canvas-wrap::before { top: 4px; left: 4px; border-width: 1px 0 0 1px; }
+  #canvas-wrap::after { bottom: 4px; right: 4px; border-width: 0 1px 1px 0; }
+  #legend { display: flex; gap: 18px; font-size: 0.68rem; color: var(--text); flex-wrap: wrap; justify-content: center; letter-spacing: 0.08em; }
+  .leg { display: flex; align-items: center; gap: 7px; }
+  .leg-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .leg-line { width: 22px; height: 2px; border-radius: 2px; flex-shrink: 0; }
+  .leg-dash { width: 22px; height: 2px; border-radius: 2px; flex-shrink: 0; background: repeating-linear-gradient(90deg, var(--boundary) 0 5px, transparent 5px 9px); }
+</style>
+</head>
+<body>
+<header>
+  <h1>XRP Robot — Path Visualizer</h1>
+  <div class="subtitle">Dead-reckoning · Constraint mapping · Sensor offset correction</div>
+</header>
+<div class="hline"></div>
+<div id="drop-zone" onclick="document.getElementById('file-input').click()">
+  <input type="file" id="file-input" accept=".txt">
+  Drop your movement_log.txt here, or click to browse — test data loaded by default
+</div>
+<div id="stats">
+  <div class="stat"><div class="stat-label">Segments</div><div class="stat-val accent" id="st-segs">—</div></div>
+  <div class="stat"><div class="stat-label">Turns</div><div class="stat-val yellow" id="st-turns">—</div></div>
+  <div class="stat"><div class="stat-label">Distance (est)</div><div class="stat-val green" id="st-dist">— cm</div></div>
+  <div class="stat"><div class="stat-label">Boundary pts</div><div class="stat-val orange" id="st-bpts">—</div></div>
+  <div class="stat"><div class="stat-label">Scale</div><div class="stat-val" id="st-scale">— px/cm</div></div>
+</div>
+<div id="canvas-wrap"><canvas id="canvas"></canvas></div>
+<div id="legend">
+  <div class="leg"><div class="leg-line" style="background:#00c8ff"></div> Robot path</div>
+  <div class="leg"><div class="leg-dash"></div> Estimated boundary</div>
+  <div class="leg"><div class="leg-dot" style="background:#39d98a"></div> Start</div>
+  <div class="leg"><div class="leg-dot" style="background:#ff4f4f"></div> End</div>
+  <div class="leg"><div class="leg-dot" style="background:#f5c542"></div> Turn point (corrected)</div>
+  <div class="leg"><div class="leg-dot" style="background:#ff6b35;opacity:0.5"></div> Turn point (raw)</div>
+</div>
+
+<script>
+const SPEED_CM_PER_MS  = 0.030;
+const SENSOR_OFFSET_CM = 5.08;
+const BACKUP_TIME_MS   = 600;
+
+const TEST_LOG = `Drive: -169.3 -0.4 0.4 242557
+Drive: -136.9 0.5 0.5 243410
+Drive: -146.7 0.4 -0.4 247352
+Drive: -245.6 0.5 0.5 249631
+Drive: -257.6 0.4 -0.4 254672
+Drive: -375.7 0.5 0.5 257611
+Pause: 261749
+Pause: 261752
+Pause: 267328`;
+
+// ── Parse ─────────────────────────────────────────────────────────────────────
+function parseLog(text) {
+  const entries = [];
+  for (const raw of text.trim().split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('Drive:')) {
+      const p = line.slice(6).trim().split(/\s+/);
+      if (p.length >= 4) {
+        const yaw=parseFloat(p[0]),lEff=parseFloat(p[1]),rEff=parseFloat(p[2]),ts=parseInt(p[3],10);
+        if (!isNaN(yaw)&&!isNaN(ts)) entries.push({type:'drive',yaw,lEff,rEff,ts});
+      } else {
+        const yaw=parseFloat(p[0]);
+        if (!isNaN(yaw)) entries.push({type:'drive',yaw,lEff:0.45,rEff:0.45,ts:null});
+      }
+    } else if (line.startsWith('Reverse:')) {
+      const p=line.slice(8).trim().split(/\s+/);
+      if (p.length>=4) {
+        const yaw=parseFloat(p[0]),lEff=parseFloat(p[1]),rEff=parseFloat(p[2]),ts=parseInt(p[3],10);
+        if (!isNaN(yaw)&&!isNaN(ts)) entries.push({type:'reverse',yaw,lEff,rEff,ts});
+      } else {
+        const ms=parseFloat(p[0]);
+        if (!isNaN(ms)) entries.push({type:'reverse_ms',ms});
+      }
+    } else if (line.startsWith('Pause:')) {
+      const ts=parseInt(line.slice(6).trim(),10);
+      if (!isNaN(ts)) entries.push({type:'pause',ts});
+    } else if (line.startsWith('Turn:')) {
+      const deg=parseFloat(line.slice(5).trim());
+      if (!isNaN(deg)) entries.push({type:'turn',deg});
+    } else if (line.startsWith('Segment:')) {
+      const ms=parseFloat(line.slice(8).trim());
+      if (!isNaN(ms)) entries.push({type:'segment',ms});
+    }
+  }
+  return entries;
+}
+
+// ── Dead-reckoning ────────────────────────────────────────────────────────────
+// Each Drive entry is assumed to drive forward from its timestamp until:
+//   - the next Drive entry's timestamp (if still in the same segment), OR
+//   - the first Pause timestamp after this group (for the last Drive in a segment).
+// This ensures the final Drive entry in every segment gets full credit
+// rather than being dropped due to having no "next" Drive to diff against.
+//
+// Drive entries with lEff != rEff are turn moves — skipped for position.
+// XRP yaw is CW-positive; negate sin so rightward = screen-east.
+
+function toRad(deg) { return deg * Math.PI / 180; }
+
+function buildPath(entries) {
+  let x=0, y=0, headingDeg=0, lastSegHeading=0;
+  const path=[{x,y}], rawTurns=[], corrTurns=[];
+  let totalDistCm=0;
+
+  // Pre-pass: assign endTs to every Drive entry.
+  const tagged = entries.map(e => ({...e, endTs: null}));
+  for (let i=0; i<tagged.length; i++) {
+    if (tagged[i].type !== 'drive') continue;
+    if (i+1 < tagged.length && tagged[i+1].type === 'drive') {
+      // Next entry is also a drive — end when that one starts
+      tagged[i].endTs = tagged[i+1].ts;
+    } else {
+      // End of drive group — find the first Pause after it
+      for (let j=i+1; j<tagged.length; j++) {
+        if (tagged[j].type === 'pause') { tagged[i].endTs = tagged[j].ts; break; }
+        if (tagged[j].type === 'drive') break;
+      }
+      // If no Pause found, fall back to 20ms default (handled in flush)
+    }
+  }
+
+  let driveGroup = [];
+
+  function flushDriveGroup() {
+    if (!driveGroup.length) return;
+    lastSegHeading = headingDeg;
+
+    for (const cur of driveGroup) {
+      // Skip turn moves (mismatched left/right effort)
+      if (Math.abs(cur.lEff - cur.rEff) > 0.05) continue;
+
+      let dt = 20; // fallback if timestamps missing
+      if (cur.ts !== null && cur.endTs !== null) {
+        dt = Math.max(5, cur.endTs - cur.ts);
+      }
+
+      const avgEff = (Math.abs(cur.lEff) + Math.abs(cur.rEff)) / 2;
+      const dist   = SPEED_CM_PER_MS * (avgEff / 0.45) * dt;
+
+      headingDeg = cur.yaw;
+      const rad  = toRad(headingDeg);
+      x -= dist * Math.sin(rad); // negate: XRP CW-positive yaw
+      y += dist * Math.cos(rad);
+      totalDistCm += dist;
+      path.push({x, y});
+    }
+
+    lastSegHeading = headingDeg;
+    driveGroup = [];
+  }
+
+  for (const e of tagged) {
+    if (e.type === 'drive') { driveGroup.push(e); continue; }
+    flushDriveGroup();
+
+    if (e.type === 'pause') {
+      // No position change — boundary already handled by endTs
+
+    } else if (e.type === 'reverse') {
+      const dist = SPEED_CM_PER_MS * BACKUP_TIME_MS;
+      const rad  = toRad(lastSegHeading);
+      x += dist * Math.sin(rad);
+      y -= dist * Math.cos(rad);
+      path.push({x, y});
+
+    } else if (e.type === 'reverse_ms') {
+      const dist = SPEED_CM_PER_MS * e.ms;
+      const rad  = toRad(lastSegHeading);
+      x += dist * Math.sin(rad);
+      y -= dist * Math.cos(rad);
+      path.push({x, y});
+
+    } else if (e.type === 'segment') {
+      lastSegHeading = headingDeg;
+      const dist = SPEED_CM_PER_MS * e.ms;
+      const rad  = toRad(headingDeg);
+      x -= dist * Math.sin(rad);
+      y += dist * Math.cos(rad);
+      totalDistCm += dist;
+      path.push({x, y});
+
+    } else if (e.type === 'turn') {
+      rawTurns.push({x, y});
+      const totalOffset = (SPEED_CM_PER_MS * BACKUP_TIME_MS) + SENSOR_OFFSET_CM;
+      const rad = toRad(lastSegHeading);
+      corrTurns.push({x: x - totalOffset*Math.sin(rad), y: y + totalOffset*Math.cos(rad)});
+      headingDeg -= e.deg;
+      while (headingDeg >  180) headingDeg -= 360;
+      while (headingDeg <= -180) headingDeg += 360;
+    }
+  }
+
+  flushDriveGroup();
+  return {path, rawTurns, corrTurns, totalDistCm};
+}
+
+// ── Convex hull ───────────────────────────────────────────────────────────────
+function convexHull(pts) {
+  if (pts.length<3) return pts.slice();
+  const sorted=pts.slice().sort((a,b)=>a.x!==b.x?a.x-b.x:a.y-b.y);
+  const cross=(O,A,B)=>(A.x-O.x)*(B.y-O.y)-(A.y-O.y)*(B.x-O.x);
+  const lower=[],upper=[];
+  for(const p of sorted){while(lower.length>=2&&cross(lower[lower.length-2],lower[lower.length-1],p)<=0)lower.pop();lower.push(p);}
+  for(let i=sorted.length-1;i>=0;i--){const p=sorted[i];while(upper.length>=2&&cross(upper[upper.length-2],upper[upper.length-1],p)<=0)upper.pop();upper.push(p);}
+  upper.pop();lower.pop();
+  return lower.concat(upper);
+}
+
+// ── Catmull-Rom spline ────────────────────────────────────────────────────────
+function catmullRomChain(pts,steps=20){
+  if(pts.length<2)return pts.slice();
+  const n=pts.length,result=[],get=i=>pts[((i%n)+n)%n];
+  for(let seg=0;seg<n;seg++){
+    const p0=get(seg-1),p1=get(seg),p2=get(seg+1),p3=get(seg+2);
+    for(let s=0;s<=steps;s++){
+      const t=s/steps,t2=t*t,t3=t2*t;
+      result.push({
+        x:0.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
+        y:0.5*((2*p1.y)+(-p0.y+p2.y)*t+(2*p0.y-5*p1.y+4*p2.y-p3.y)*t2+(-p0.y+3*p1.y-3*p2.y+p3.y)*t3)
+      });
+    }
+  }
+  return result;
+}
+
+// ── Draw ──────────────────────────────────────────────────────────────────────
+function draw(path, rawTurns, corrTurns) {
+  const canvas=document.getElementById('canvas'),wrap=document.getElementById('canvas-wrap');
+  const MAX_W=Math.min(window.innerWidth-48,900),MAX_H=Math.max(window.innerHeight*0.65,420);
+  const allPts=path.concat(corrTurns);
+  const xs=allPts.map(p=>p.x),ys=allPts.map(p=>p.y);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const spanX=(maxX-minX)||1,spanY=(maxY-minY)||1;
+  const MARGIN=60,scale=Math.min((MAX_W-MARGIN*2)/spanX,(MAX_H-MARGIN*2)/spanY,10);
+  const W=Math.ceil(spanX*scale+MARGIN*2),H=Math.ceil(spanY*scale+MARGIN*2);
+  canvas.width=W;canvas.height=H;wrap.style.width=W+'px';wrap.style.height=H+'px';
+  document.getElementById('st-scale').textContent=scale.toFixed(2)+' px/cm';
+  const ctx=canvas.getContext('2d');
+  const sx=x=>(x-minX)*scale+MARGIN,sy=y=>H-((y-minY)*scale+MARGIN);
+  ctx.fillStyle='#080c10';ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='#0e1620';ctx.lineWidth=1;
+  for(let gx=Math.floor(minX/5)*5;gx<=maxX+5;gx+=5){ctx.beginPath();ctx.moveTo(sx(gx),0);ctx.lineTo(sx(gx),H);ctx.stroke();}
+  for(let gy=Math.floor(minY/5)*5;gy<=maxY+5;gy+=5){ctx.beginPath();ctx.moveTo(0,sy(gy));ctx.lineTo(W,sy(gy));ctx.stroke();}
+  ctx.strokeStyle='#111c28';
+  for(let gx=Math.floor(minX/10)*10;gx<=maxX+10;gx+=10){ctx.beginPath();ctx.moveTo(sx(gx),0);ctx.lineTo(sx(gx),H);ctx.stroke();}
+  for(let gy=Math.floor(minY/10)*10;gy<=maxY+10;gy+=10){ctx.beginPath();ctx.moveTo(0,sy(gy));ctx.lineTo(W,sy(gy));ctx.stroke();}
+  ctx.strokeStyle='#1c2f42';ctx.setLineDash([4,6]);
+  ctx.beginPath();ctx.moveTo(sx(0),0);ctx.lineTo(sx(0),H);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(0,sy(0));ctx.lineTo(W,sy(0));ctx.stroke();
+  ctx.setLineDash([]);
+  if(corrTurns.length>=3){
+    const smooth=catmullRomChain(convexHull(corrTurns),24);
+    const bp=()=>{ctx.beginPath();ctx.moveTo(sx(smooth[0].x),sy(smooth[0].y));for(let i=1;i<smooth.length;i++)ctx.lineTo(sx(smooth[i].x),sy(smooth[i].y));ctx.closePath();};
+    bp();ctx.fillStyle='rgba(255,107,53,0.055)';ctx.fill();
+    bp();ctx.strokeStyle='#ff6b35';ctx.lineWidth=1.5;ctx.setLineDash([6,5]);ctx.stroke();ctx.setLineDash([]);
+    bp();ctx.strokeStyle='rgba(255,107,53,0.15)';ctx.lineWidth=6;ctx.stroke();
+  }
+  ctx.beginPath();ctx.moveTo(sx(path[0].x),sy(path[0].y));
+  for(let i=1;i<path.length;i++)ctx.lineTo(sx(path[i].x),sy(path[i].y));
+  ctx.strokeStyle='rgba(0,200,255,0.12)';ctx.lineWidth=8;ctx.lineJoin='round';ctx.lineCap='round';ctx.stroke();
+  const grad=ctx.createLinearGradient(sx(path[0].x),sy(path[0].y),sx(path[path.length-1].x),sy(path[path.length-1].y));
+  grad.addColorStop(0,'#00c8ff');grad.addColorStop(0.5,'#3fa8ff');grad.addColorStop(1,'#80b8ff');
+  ctx.beginPath();ctx.moveTo(sx(path[0].x),sy(path[0].y));
+  for(let i=1;i<path.length;i++)ctx.lineTo(sx(path[i].x),sy(path[i].y));
+  ctx.strokeStyle=grad;ctx.lineWidth=2;ctx.stroke();
+  for(const t of rawTurns){ctx.beginPath();ctx.arc(sx(t.x),sy(t.y),3,0,Math.PI*2);ctx.fillStyle='rgba(255,107,53,0.3)';ctx.fill();}
+  for(const t of corrTurns){
+    ctx.beginPath();ctx.arc(sx(t.x),sy(t.y),6,0,Math.PI*2);ctx.strokeStyle='rgba(245,197,66,0.3)';ctx.lineWidth=2;ctx.stroke();
+    ctx.beginPath();ctx.arc(sx(t.x),sy(t.y),3.5,0,Math.PI*2);ctx.fillStyle='#f5c542';ctx.fill();
+  }
+  const p0=path[0];
+  ctx.beginPath();ctx.arc(sx(p0.x),sy(p0.y),8,0,Math.PI*2);ctx.fillStyle='#39d98a';ctx.fill();
+  ctx.fillStyle='#080c10';ctx.font='bold 8px "Orbitron",sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('S',sx(p0.x),sy(p0.y));
+  const pN=path[path.length-1];
+  ctx.beginPath();ctx.arc(sx(pN.x),sy(pN.y),8,0,Math.PI*2);ctx.fillStyle='#ff4f4f';ctx.fill();
+  ctx.fillStyle='#080c10';ctx.fillText('E',sx(pN.x),sy(pN.y));
+  const BAR_PX=10*scale,bx=MARGIN,by=H-18;
+  ctx.strokeStyle='#3a5068';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx+BAR_PX,by);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(bx,by-4);ctx.lineTo(bx,by+4);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(bx+BAR_PX,by-4);ctx.lineTo(bx+BAR_PX,by+4);ctx.stroke();
+  ctx.fillStyle='#3a5068';ctx.font='9px "Share Tech Mono",monospace';ctx.textAlign='center';ctx.textBaseline='top';
+  ctx.fillText('10 cm',bx+BAR_PX/2,by+6);
+}
+
+// ── Process / file handling ───────────────────────────────────────────────────
+function processLog(text) {
+  const entries=parseLog(text);
+  let segs=0,inRun=false;
+  for(const e of entries){
+    if(e.type==='drive'){if(!inRun){segs++;inRun=true;}}
+    else if(e.type==='segment'){segs++;inRun=false;}
+    else{inRun=false;}
+  }
+  const turns=entries.filter(e=>e.type==='turn').length;
+  const drives=entries.filter(e=>e.type==='drive').length;
+  const {path,rawTurns,corrTurns,totalDistCm}=buildPath(entries);
+  document.getElementById('st-segs').textContent=segs+' ('+drives+' samples)';
+  document.getElementById('st-turns').textContent=turns;
+  document.getElementById('st-dist').textContent=totalDistCm.toFixed(1)+' cm';
+  document.getElementById('st-bpts').textContent=corrTurns.length;
+  draw(path,rawTurns,corrTurns);
+}
+
+function handleFile(file){const r=new FileReader();r.onload=e=>processLog(e.target.result);r.readAsText(file);}
+window.addEventListener('load',()=>processLog(TEST_LOG));
+document.getElementById('file-input').addEventListener('change',e=>{if(e.target.files[0])handleFile(e.target.files[0]);});
+const dz=document.getElementById('drop-zone');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over');});
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0]);});
+</script>
+</body>
+</html>
