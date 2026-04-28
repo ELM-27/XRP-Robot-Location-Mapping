@@ -6,9 +6,9 @@ import time
 import random
 import math
 
-board        = Board.get_default_board()
-reflectance  = Reflectance.get_default_reflectance()
-drive        = DifferentialDrive.get_default_differential_drive()
+board       = Board.get_default_board()
+reflectance = Reflectance.get_default_reflectance()
+drive       = DifferentialDrive.get_default_differential_drive()
 
 SPEED           = 0.45
 THRESH          = 0.05
@@ -17,7 +17,7 @@ PAUSE_MS        = 80
 TURN_EFFORT     = 0.45
 YAW_INTERVAL_MS = 20
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def fmt1(v):
     return str(round(v, 1))
@@ -42,11 +42,26 @@ def rDrive(leftEffort, rightEffort, recordFile):
                  fmt3(leftEffort) + " " + fmt3(rightEffort) + " " +
                  str(time.ticks_ms()))
 
+def rReverse(startEffort, recordFile):
+    drive.set_effort(-startEffort, -startEffort)
+    currentYaw = imu.get_yaw()
+    stdFileWrite(recordFile, "Reverse: " + fmt1(currentYaw) + " " +
+                 fmt3(-startEffort) + " " + fmt3(-startEffort) + " " +
+                 str(time.ticks_ms()))
+
+def rTurn(degrees, startEffort, recordFile):
+    stdFileWrite(recordFile, "Pause: " + str(time.ticks_ms()))
+    drive.turn(degrees, startEffort)
+
+def rStop(recordFile):
+    stdFileWrite(recordFile, "Pause: " + str(time.ticks_ms()))
+    drive.stop()
+
 def on_line():
     return (abs(reflectance.get_left()  - start_left)  >= THRESH or
             abs(reflectance.get_right() - start_right) >= THRESH)
 
-# ── Setup ────────────────────────────────────────────────────────────────────
+# ── Setup ─────────────────────────────────────────────────────────────────────
 
 imu.calibrate()
 
@@ -58,35 +73,28 @@ time.sleep_ms(300)
 start_left  = reflectance.get_left()
 start_right = reflectance.get_right()
 
-# Open file once for the whole session — stdFileWrite appends lines as we go
 f = open("movement_log.txt", "w")
 line_count = 0
 
-# ── Main mapping loop ────────────────────────────────────────────────────────
+# ── Main mapping loop ─────────────────────────────────────────────────────────
 
 while not board.is_button_pressed():
 
-    # — Drive forward, logging heading+effort+timestamp each YAW_INTERVAL_MS —
-    t_start    = time.ticks_ms()
-    t_last_yaw = t_start
-
+    # — Drive forward —
+    t_last_yaw = time.ticks_ms()
     rDriveStraight(SPEED, f)
     line_count += 1
 
     while (not board.is_button_pressed()) and (not on_line()):
         now = time.ticks_ms()
         if time.ticks_diff(now, t_last_yaw) >= YAW_INTERVAL_MS:
-            rDriveStraight(SPEED, f)   # re-log at each interval (yaw may drift)
+            rDriveStraight(SPEED, f)
             line_count += 1
             t_last_yaw = now
         time.sleep_ms(5)
 
-    drive.stop()
-    t_end      = time.ticks_ms()
-    segment_ms = time.ticks_diff(t_end, t_start)
-
-    # Log the segment summary (duration) after the drive entries
-    stdFileWrite(f, "Segment: " + str(segment_ms))
+    # — Stop and log pause —
+    rStop(f)
     line_count += 1
 
     if board.is_button_pressed():
@@ -95,41 +103,29 @@ while not board.is_button_pressed():
     time.sleep_ms(PAUSE_MS)
 
     # — Reverse —
-    stdFileWrite(f, "Reverse: " + fmt1(float(BACKUP_TIME_MS)))
-    line_count += 1
-    rDrive(-SPEED, -SPEED, f)
+    rReverse(SPEED, f)
     line_count += 1
     time.sleep_ms(BACKUP_TIME_MS)
-    drive.stop()
+    rStop(f)
+    line_count += 1
     time.sleep_ms(PAUSE_MS)
 
     # — Random turn —
-    turn_deg  = random.randint(-180, 180)
-    direction = 1 if turn_deg >= 0 else -1
-    abs_deg   = abs(turn_deg)
-
-    yaw_before = imu.get_yaw()
-    rDrive(-direction * TURN_EFFORT, direction * TURN_EFFORT, f)
+    turn_deg = random.randint(-180, 180)
+    rTurn(turn_deg, TURN_EFFORT, f)
     line_count += 1
-    time.sleep_ms(int(abs_deg * 1000 // 180))   # ~duration for requested degrees
-    drive.stop()
-    time.sleep_ms(100)
 
+    # — Log actual turn angle from IMU —
     yaw_after   = imu.get_yaw()
-    actual_turn = yaw_after - yaw_before
-    while actual_turn >  180: actual_turn -= 360
-    while actual_turn < -180: actual_turn += 360
-
-    stdFileWrite(f, "Turn: " + fmt1(actual_turn))
-    line_count += 1
 
     time.sleep_ms(PAUSE_MS)
     start_left  = reflectance.get_left()
     start_right = reflectance.get_right()
 
-# ── Finish ───────────────────────────────────────────────────────────────────
+# ── Finish ────────────────────────────────────────────────────────────────────
 
-drive.stop()
+rStop(f)
+line_count += 1
 f.close()
 print("Saved movement_log.txt (" + str(line_count) + " lines)")
 print("Retrieve it via XRPCode Files tab.")
