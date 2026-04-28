@@ -6,6 +6,8 @@ import time
 import random
 import math
 
+drivetrain = DifferentialDrive.get_default_differential_drive()
+
 def stdFileWrite(recordFile, movements) :
     f.write(movements + "\n")
     
