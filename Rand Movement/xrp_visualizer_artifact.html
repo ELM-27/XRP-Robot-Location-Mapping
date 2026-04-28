@@ -338,6 +338,7 @@ function processLog(text) {
   draw(path,rawTurns,corrTurns);
 }
 
+ 
 function handleFile(file){const r=new FileReader();r.onload=e=>processLog(e.target.result);r.readAsText(file);}
 window.addEventListener('load',()=>processLog(TEST_LOG));
 document.getElementById('file-input').addEventListener('change',e=>{if(e.target.files[0])handleFile(e.target.files[0]);});
