@@ -12,12 +12,11 @@ SPEED          = 0.45
 TURN_EFFORT    = 0.45
 BACKUP_TIME_MS = 600
 PAUSE_MS       = 80
-TURN_TOLERANCE = 2.0
-TURN_OVERSHOOT = 3.0
 
-# ── Parse log ────────────────────────────────────────────────────────────────
-# New Drive format: "Drive: <yaw> <leftEffort> <rightEffort> <timestamp_ms>"
-# Segment/Reverse/Turn format unchanged.
+# ── Parse log ─────────────────────────────────────────────────────────────────
+# Format: "Drive: <yaw> <leftEff> <rightEff> <timestamp_ms>"
+#         "Reverse: <yaw> <leftEff> <rightEff> <timestamp_ms>"
+#         "Pause: <timestamp_ms>"
 
 print("Loading movement_log.txt...")
 entries = []
@@ -32,35 +31,39 @@ try:
         if line.startswith("Drive:"):
             parts = line[6:].strip().split()
             if len(parts) >= 4:
-                yaw       = float(parts[0])
-                leftEff   = float(parts[1])
-                rightEff  = float(parts[2])
-                ts        = int(parts[3])
+                yaw      = float(parts[0])
+                leftEff  = float(parts[1])
+                rightEff = float(parts[2])
+                ts       = int(parts[3])
                 entries.append(("drive", yaw, leftEff, rightEff, ts))
             elif len(parts) == 1:
-                # Legacy format: "Drive: <yaw>" with no effort/timestamp
+                # Legacy single-yaw format
                 entries.append(("drive", float(parts[0]), SPEED, SPEED, None))
-
-        elif line.startswith("Segment:"):
-            val = float(line[8:].strip())
-            entries.append(("segment", val))
 
         elif line.startswith("Reverse:"):
             parts = line[8:].strip().split()
-            # May be "Reverse: <ms>" or "Reverse: <yaw> <left> <right> <ts>"
             if len(parts) >= 4:
                 yaw      = float(parts[0])
                 leftEff  = float(parts[1])
                 rightEff = float(parts[2])
                 ts       = int(parts[3])
-                entries.append(("reverse_drive", yaw, leftEff, rightEff, ts))
+                entries.append(("reverse", yaw, leftEff, rightEff, ts))
             else:
-                val = float(parts[0])
-                entries.append(("reverse", val))
+                # Legacy plain-ms format
+                entries.append(("reverse_ms", float(parts[0])))
+
+        elif line.startswith("Pause:"):
+            ts = int(line[6:].strip())
+            entries.append(("pause", ts))
 
         elif line.startswith("Turn:"):
             val = float(line[5:].strip().split()[0])
             entries.append(("turn", val))
+
+        elif line.startswith("Segment:"):
+            # Legacy fallback
+            val = float(line[8:].strip())
+            entries.append(("segment", val))
 
     f.close()
 except OSError:
@@ -69,42 +72,16 @@ except OSError:
 
 print("Loaded " + str(len(entries)) + " entries.")
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 imu.calibrate()
 
-def angle_diff(target, current):
-    d = target - current
-    while d >  180: d -= 360
-    while d < -180: d += 360
-    return d
-
-def do_reverse(dur_ms):
-    drive.set_effort(-SPEED, -SPEED)
-    time.sleep_ms(int(dur_ms))
-    drive.stop()
-    time.sleep_ms(PAUSE_MS)
-
-def do_turn(delta_deg):
-    start_yaw  = imu.get_yaw()
-    target_yaw = start_yaw + delta_deg
-    direction  = 1 if delta_deg >= 0 else -1
-    early_stop = target_yaw - (direction * TURN_OVERSHOOT)
-    drive.set_effort(-direction * TURN_EFFORT, direction * TURN_EFFORT)
-    while abs(angle_diff(early_stop, imu.get_yaw())) > TURN_TOLERANCE:
-        time.sleep_ms(5)
-    drive.stop()
-    time.sleep_ms(PAUSE_MS)
-
-# ── Group Drive entries into segments using timestamps ────────────────────────
-# Consecutive Drive entries belong to one forward run.
-# We replay each group by re-issuing effort+sleep per actual timestamp delta.
-
 def replay_drive_group(group):
     """
-    group: list of ("drive", yaw, leftEff, rightEff, ts) tuples
-    Replays by holding each effort for the delta to the next entry,
-    then stops. Falls back to uniform 20ms if timestamps are missing.
+    Replays consecutive Drive entries using timestamp deltas for timing.
+    Each entry sets the effort and holds it until the next sample's timestamp.
+    Falls back to 20ms per step if timestamps are missing.
+    Stops and pauses after the group completes.
     """
     for idx in range(len(group)):
         _, yaw, leftEff, rightEff, ts = group[idx]
@@ -112,13 +89,21 @@ def replay_drive_group(group):
 
         if ts is not None and idx + 1 < len(group) and group[idx+1][4] is not None:
             delta = group[idx+1][4] - ts
-            # Clamp: ignore negative deltas (clock wrap) and huge gaps
-            delta = max(5, min(delta, 500))
+            delta = max(5, min(delta, 500))  # clamp: ignore wrap/noise
         else:
-            delta = 20   # legacy fallback
+            delta = 20  # legacy fallback
 
         time.sleep_ms(delta)
 
+    drive.stop()
+    time.sleep_ms(PAUSE_MS)
+
+def replay_reverse(leftEff, rightEff):
+    """
+    Replays a reverse action using the logged effort values for BACKUP_TIME_MS.
+    """
+    drive.set_effort(leftEff, rightEff)
+    time.sleep_ms(BACKUP_TIME_MS)
     drive.stop()
     time.sleep_ms(PAUSE_MS)
 
@@ -130,44 +115,51 @@ while not board.is_button_pressed():
 time.sleep_ms(300)
 print("Replaying...")
 
-# ── Replay ───────────────────────────────────────────────────────────────────
+# ── Replay ────────────────────────────────────────────────────────────────────
 
 i = 0
 while i < len(entries):
     action = entries[i][0]
 
     if action == "drive":
-        # Collect consecutive drive entries as one forward segment
+        # Collect all consecutive drive entries into one segment group
         group = []
         while i < len(entries) and entries[i][0] == "drive":
             group.append(entries[i])
             i += 1
         replay_drive_group(group)
 
-    elif action == "segment":
-        # Segment: duration fallback (used if no Drive entries precede it)
-        val = entries[i][1]
-        drive.set_effort(SPEED, SPEED)
-        time.sleep_ms(int(val))
-        drive.stop()
+    elif action == "pause":
+        # Pause marks a stop event — robot already stopped in mapper,
+        # just hold briefly before next action
         time.sleep_ms(PAUSE_MS)
         i += 1
 
     elif action == "reverse":
-        do_reverse(entries[i][1])
+        _, yaw, leftEff, rightEff, ts = entries[i]
+        replay_reverse(leftEff, rightEff)
         i += 1
 
-    elif action == "reverse_drive":
-        # Reverse logged via rDrive — use the effort values directly
-        _, yaw, leftEff, rightEff, ts = entries[i]
-        drive.set_effort(leftEff, rightEff)
-        time.sleep_ms(BACKUP_TIME_MS)
+    elif action == "reverse_ms":
+        # Legacy: plain millisecond reverse
+        drive.set_effort(-SPEED, -SPEED)
+        time.sleep_ms(int(entries[i][1]))
         drive.stop()
         time.sleep_ms(PAUSE_MS)
         i += 1
 
     elif action == "turn":
-        do_turn(entries[i][1])
+        # Use drivetrain.turn() to mirror rTurn in the mapper
+        drive.turn(entries[i][1], TURN_EFFORT)
+        time.sleep_ms(PAUSE_MS)
+        i += 1
+
+    elif action == "segment":
+        # Legacy fallback: no Drive entries, just duration
+        drive.set_effort(SPEED, SPEED)
+        time.sleep_ms(int(entries[i][1]))
+        drive.stop()
+        time.sleep_ms(PAUSE_MS)
         i += 1
 
     else:
