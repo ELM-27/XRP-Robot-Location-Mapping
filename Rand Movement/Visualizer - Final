@@ -241,6 +241,12 @@ const SENSOR_OFFSET_CM = 5.08;
 const BACKUP_TIME_MS   = 600;
 
 // ─── Parse ───────────────────────────────────────────────────────────────────
+// Log format:
+//   Drive:   <yaw> <leftEff> <rightEff> <timestamp_ms>
+//   Reverse: <yaw> <leftEff> <rightEff> <timestamp_ms>
+//   Pause:   <timestamp_ms>   ← robot stopped (before turn or at end)
+//   Turn:    <deg>            ← logged by drivetrain.turn() completion
+//   Segment: <ms>             ← legacy fallback only
 function parseLog(text) {
   const lines   = text.trim().split('\n');
   const entries = [];
@@ -259,27 +265,41 @@ function parseLog(text) {
         if (!isNaN(yaw) && !isNaN(ts))
           entries.push({ type: 'drive', yaw, lEff, rEff, ts });
       } else {
+        // Legacy single-yaw
         const yaw = parseFloat(parts[0]);
         if (!isNaN(yaw))
           entries.push({ type: 'drive', yaw, lEff: 0.45, rEff: 0.45, ts: null });
       }
 
-    } else if (line.startsWith('Segment:')) {
-      const ms = parseFloat(line.slice(8).trim());
-      if (!isNaN(ms)) entries.push({ type: 'segment', ms });
-
     } else if (line.startsWith('Reverse:')) {
       const parts = line.slice(8).trim().split(/\s+/);
       if (parts.length >= 4) {
-        entries.push({ type: 'reverse_drive' });
+        // New format: yaw leftEff rightEff timestamp
+        const yaw  = parseFloat(parts[0]);
+        const lEff = parseFloat(parts[1]);
+        const rEff = parseFloat(parts[2]);
+        const ts   = parseInt(parts[3], 10);
+        if (!isNaN(yaw) && !isNaN(ts))
+          entries.push({ type: 'reverse', yaw, lEff, rEff, ts });
       } else {
+        // Legacy plain-ms
         const ms = parseFloat(parts[0]);
-        if (!isNaN(ms)) entries.push({ type: 'reverse', ms });
+        if (!isNaN(ms)) entries.push({ type: 'reverse_ms', ms });
       }
+
+    } else if (line.startsWith('Pause:')) {
+      // Marks a stop event — used as segment boundary in dead-reckoning
+      const ts = parseInt(line.slice(6).trim(), 10);
+      if (!isNaN(ts)) entries.push({ type: 'pause', ts });
 
     } else if (line.startsWith('Turn:')) {
       const deg = parseFloat(line.slice(5).trim());
       if (!isNaN(deg)) entries.push({ type: 'turn', deg });
+
+    } else if (line.startsWith('Segment:')) {
+      // Legacy fallback
+      const ms = parseFloat(line.slice(8).trim());
+      if (!isNaN(ms)) entries.push({ type: 'segment', ms });
     }
   }
   return entries;
@@ -333,10 +353,33 @@ function buildPath(entries) {
   for (const e of entries) {
     if (e.type === 'drive') {
       driveGroup.push(e);
+
     } else {
       flushDriveGroup();
 
-      if (e.type === 'segment') {
+      if (e.type === 'pause') {
+        // No position change — just marks a stop boundary.
+        // lastSegHeading is already set by the preceding drive flush.
+
+      } else if (e.type === 'reverse') {
+        // New 4-field reverse: use BACKUP_TIME_MS for distance
+        // (effort values confirm direction but duration is fixed)
+        const dist = SPEED_CM_PER_MS * BACKUP_TIME_MS;
+        const rad  = toRad(lastSegHeading);
+        x -= dist * Math.sin(rad);
+        y -= dist * Math.cos(rad);
+        path.push({ x, y });
+
+      } else if (e.type === 'reverse_ms') {
+        // Legacy plain-ms reverse
+        const dist = SPEED_CM_PER_MS * e.ms;
+        const rad  = toRad(lastSegHeading);
+        x -= dist * Math.sin(rad);
+        y -= dist * Math.cos(rad);
+        path.push({ x, y });
+
+      } else if (e.type === 'segment') {
+        // Legacy fallback
         lastSegHeading = headingDeg;
         const dist = SPEED_CM_PER_MS * e.ms;
         const rad  = toRad(headingDeg);
@@ -345,31 +388,18 @@ function buildPath(entries) {
         totalDistCm += dist;
         path.push({ x, y });
 
-      } else if (e.type === 'reverse') {
-        const dist = SPEED_CM_PER_MS * e.ms;
-        const rad  = toRad(lastSegHeading);
-        x -= dist * Math.sin(rad);
-        y -= dist * Math.cos(rad);
-        path.push({ x, y });
-
-      } else if (e.type === 'reverse_drive') {
-        const dist = SPEED_CM_PER_MS * BACKUP_TIME_MS;
-        const rad  = toRad(lastSegHeading);
-        x -= dist * Math.sin(rad);
-        y -= dist * Math.cos(rad);
-        path.push({ x, y });
-
       } else if (e.type === 'turn') {
         rawTurns.push({ x, y });
 
-        const backupDist  = SPEED_CM_PER_MS * BACKUP_TIME_MS;
-        const totalOffset = backupDist + SENSOR_OFFSET_CM;
+        // Boundary contact: backup dist + sensor offset ahead of post-reverse position
+        const totalOffset = (SPEED_CM_PER_MS * BACKUP_TIME_MS) + SENSOR_OFFSET_CM;
         const rad = toRad(lastSegHeading);
         corrTurns.push({
           x: x + totalOffset * Math.sin(rad),
           y: y + totalOffset * Math.cos(rad)
         });
 
+        // XRP yaw CW-positive → negate for screen CCW-positive
         headingDeg -= e.deg;
         while (headingDeg >  180) headingDeg -= 360;
         while (headingDeg <= -180) headingDeg += 360;
