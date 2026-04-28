@@ -9,7 +9,7 @@ import math
 drivetrain = DifferentialDrive.get_default_differential_drive()
 
 def stdFileWrite(recordFile, movements) :
-    f.write(movements + "\n")
+    recordFile.write(movements + "\n")
     
 def fmt1(v):
     return str(round(v, 1))
